@@ -1,0 +1,16 @@
+2026/05/28-12:47:07.893 6c05d2 Reusing MANIFEST /Users/harsh/Downloads/wacrm/backend/.wwebjs_auth/session-cmpp3a6jn0006h43cuq0a3a9u/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/05/28-12:47:07.894 6c05d2 Recovering log #99
+2026/05/28-12:47:07.913 6c05d2 Reusing old log /Users/harsh/Downloads/wacrm/backend/.wwebjs_auth/session-cmpp3a6jn0006h43cuq0a3a9u/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/000099.log 
+2026/05/28-12:47:11.584 6c05c7 Level-0 table #107: started
+2026/05/28-12:47:11.607 6c05c7 Level-0 table #107: 1091685 bytes OK
+2026/05/28-12:47:11.609 6c05c7 Delete type=0 #99
+2026/05/28-12:47:30.386 6c05c7 Compacting 1@1 + 3@2 files
+2026/05/28-12:47:30.427 6c05c7 Generated table #108@1: 84462 keys, 2263403 bytes
+2026/05/28-12:47:30.452 6c05c7 Generated table #109@1: 20125 keys, 2174149 bytes
+2026/05/28-12:47:30.487 6c05c7 Generated table #110@1: 71569 keys, 2182223 bytes
+2026/05/28-12:47:30.487 6c05c7 Compacted 1@1 + 3@2 files => 6619775 bytes
+2026/05/28-12:47:30.490 6c05c7 compacted to: files[ 0 0 3 0 0 0 0 ]
+2026/05/28-12:47:30.490 6c05c7 Delete type=2 #102
+2026/05/28-12:47:30.490 6c05c7 Delete type=2 #103
+2026/05/28-12:47:30.490 6c05c7 Delete type=2 #104
+2026/05/28-12:47:30.490 6c05c7 Delete type=2 #107

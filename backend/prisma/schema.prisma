@@ -1,0 +1,503 @@
+// This is your Prisma schema file
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── USERS & AUTH ───────────────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  avatar        String?
+  role          UserRole  @default(MEMBER)
+  phone         String?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  organization  Organization  @relation(fields: [orgId], references: [id])
+  orgId         String
+  refreshTokens RefreshToken[]
+  campaigns     Campaign[]    @relation("CampaignCreator")
+  leads         Lead[]        @relation("LeadOwner")
+  assignedLeads Lead[]        @relation("LeadAssignee")
+  activities    Activity[]
+  notes         Note[]
+  reminders     Reminder[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+// ─── ORGANIZATION ───────────────────────────────────────────────────────────
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  logo        String?
+  plan        PlanType @default(FREE)
+  planExpiry  DateTime?
+  settings    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users       User[]
+  leads       Lead[]
+  campaigns   Campaign[]
+  tags        Tag[]
+  pipelines   Pipeline[]
+  scraperJobs ScraperJob[]
+  whatsappSessions WhatsAppSession[]
+  payments    Payment[]
+
+  @@map("organizations")
+}
+
+enum PlanType {
+  FREE
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+// ─── CRM / LEADS ─────────────────────────────────────────────────────────────
+
+model Lead {
+  id            String      @id @default(cuid())
+  name          String
+  phone         String
+  email         String?
+  company       String?
+  city          String?
+  state         String?
+  country       String      @default("India")
+  address       String?
+  category      String?
+  website       String?
+  source        LeadSource  @default(MANUAL)
+  stage         LeadStage   @default(NEW)
+  customerStatus CustomerStatus @default(NEW_LEAD)
+  score         Int         @default(0)
+  rating        Float?
+  isBlocked     Boolean     @default(false)
+  followUpAt    DateTime?
+  lastContactedAt DateTime?
+  lastRepliedAt DateTime?
+  unreadCount   Int         @default(0)
+  customFields  Json        @default("{}")
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Relations
+  org           Organization @relation(fields: [orgId], references: [id])
+  orgId         String
+  owner         User?        @relation("LeadOwner", fields: [ownerId], references: [id])
+  ownerId       String?
+  assignedTo    User?        @relation("LeadAssignee", fields: [assignedToId], references: [id])
+  assignedToId  String?
+  tags          LeadTag[]
+  notes         Note[]
+  activities    Activity[]
+  reminders     Reminder[]
+  messages      Message[]
+  campaignLeads CampaignLead[]
+
+  @@index([orgId, stage])
+  @@index([orgId, customerStatus])
+  @@index([orgId, followUpAt])
+  @@index([phone])
+  @@map("leads")
+}
+
+enum CustomerStatus {
+  NEW_LEAD
+  INTERESTED
+  NOT_INTERESTED
+  FOLLOW_UP_PENDING
+  CALLBACK
+  CONVERTED
+  CLOSED
+  NO_RESPONSE
+}
+
+enum LeadSource {
+  MANUAL
+  CSV_IMPORT
+  GOOGLE_MAPS
+  JUSTDIAL
+  INDIAMART
+  WEBSITE_FORM
+  WHATSAPP
+  REFERRAL
+  OTHER
+}
+
+enum LeadStage {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+  DORMANT
+}
+
+model Tag {
+  id        String    @id @default(cuid())
+  name      String
+  color     String    @default("#6366f1")
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id])
+  leads     LeadTag[]
+  createdAt DateTime  @default(now())
+
+  @@unique([name, orgId])
+  @@map("tags")
+}
+
+model LeadTag {
+  leadId    String
+  tagId     String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag       Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  @@id([leadId, tagId])
+  @@map("lead_tags")
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  content   String
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("notes")
+}
+
+model Activity {
+  id          String       @id @default(cuid())
+  type        ActivityType
+  description String
+  metadata    Json         @default("{}")
+  leadId      String
+  lead        Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?        @relation(fields: [userId], references: [id])
+  createdAt   DateTime     @default(now())
+
+  @@index([leadId])
+  @@map("activities")
+}
+
+enum ActivityType {
+  STAGE_CHANGED
+  NOTE_ADDED
+  MESSAGE_SENT
+  MESSAGE_RECEIVED
+  CALL_MADE
+  REMINDER_SET
+  TAG_ADDED
+  TAG_REMOVED
+  LEAD_CREATED
+  LEAD_UPDATED
+  SCORE_UPDATED
+}
+
+model Reminder {
+  id          String         @id @default(cuid())
+  title       String
+  description String?
+  dueAt       DateTime
+  status      ReminderStatus @default(PENDING)
+  leadId      String
+  lead        Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  createdAt   DateTime       @default(now())
+
+  @@map("reminders")
+}
+
+enum ReminderStatus {
+  PENDING
+  COMPLETED
+  SNOOZED
+  CANCELLED
+}
+
+// ─── PIPELINE ─────────────────────────────────────────────────────────────
+
+model Pipeline {
+  id        String   @id @default(cuid())
+  name      String
+  stages    Json     @default("[]") // [{id, name, color, order}]
+  isDefault Boolean  @default(false)
+  orgId     String
+  org       Organization @relation(fields: [orgId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@map("pipelines")
+}
+
+// ─── WHATSAPP ─────────────────────────────────────────────────────────────
+
+model WhatsAppSession {
+  id            String        @id @default(cuid())
+  name          String
+  phone         String?
+  status        SessionStatus @default(DISCONNECTED)
+  qrCode        String?
+  healthScore   Int           @default(100)
+  messagesSent  Int           @default(0)
+  warmupLevel   Int           @default(0)
+  orgId         String
+  org           Organization  @relation(fields: [orgId], references: [id])
+  campaigns     Campaign[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@map("whatsapp_sessions")
+}
+
+enum SessionStatus {
+  CONNECTED
+  DISCONNECTED
+  SCANNING
+  BANNED
+  WARMING_UP
+}
+
+// ─── CAMPAIGNS ────────────────────────────────────────────────────────────
+
+model Campaign {
+  id              String         @id @default(cuid())
+  name            String
+  description     String?
+  status          CampaignStatus @default(DRAFT)
+  messageTemplate String
+  variables       Json           @default("[]")
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  minDelay        Int            @default(3)   // seconds
+  maxDelay        Int            @default(8)   // seconds
+  dailyLimit      Int            @default(100)
+  totalSent       Int            @default(0)
+  totalDelivered  Int            @default(0)
+  totalFailed     Int            @default(0)
+  totalReplied    Int            @default(0)
+  settings        Json           @default("{}")
+  orgId           String
+  org             Organization   @relation(fields: [orgId], references: [id])
+  createdById     String
+  createdBy       User           @relation("CampaignCreator", fields: [createdById], references: [id])
+  sessionId       String?
+  session         WhatsAppSession? @relation(fields: [sessionId], references: [id])
+  leads           CampaignLead[]
+  messages        Message[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([orgId, status])
+  @@map("campaigns")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model CampaignLead {
+  id           String       @id @default(cuid())
+  campaignId   String
+  campaign     Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  leadId       String
+  lead         Lead         @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  status       MessageStatus @default(PENDING)
+  personalizedMessage String?
+  scheduledAt  DateTime?
+  sentAt       DateTime?
+  deliveredAt  DateTime?
+  repliedAt    DateTime?
+  failReason   String?
+  retryCount   Int          @default(0)
+  createdAt    DateTime     @default(now())
+
+  @@unique([campaignId, leadId])
+  @@map("campaign_leads")
+}
+
+// ─── MESSAGES ────────────────────────────────────────────────────────────
+
+model Message {
+  id          String        @id @default(cuid())
+  direction   MessageDirection
+  content     String
+  status      MessageStatus @default(PENDING)
+  mediaType   MessageMediaType @default(TEXT)
+  mediaUrl    String?
+  fileName    String?
+  mimeType    String?
+  messageId   String?       // WhatsApp message ID
+  campaignId  String?
+  campaign    Campaign?     @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  leadId      String
+  lead        Lead          @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  sentAt      DateTime?
+  deliveredAt DateTime?
+  readAt      DateTime?
+  failReason  String?
+  metadata    Json          @default("{}")
+  createdAt   DateTime      @default(now())
+
+  @@index([leadId])
+  @@index([campaignId])
+  @@map("messages")
+}
+
+enum MessageMediaType {
+  TEXT
+  IMAGE
+  AUDIO
+  VIDEO
+  DOCUMENT
+}
+
+enum MessageDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum MessageStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  REPLIED
+}
+
+// ─── SCRAPER ─────────────────────────────────────────────────────────────
+
+model ScraperJob {
+  id          String      @id @default(cuid())
+  source      ScraperSource
+  query       String
+  location    String?
+  category    String?
+  status      JobStatus   @default(PENDING)
+  totalFound  Int         @default(0)
+  imported    Int         @default(0)
+  error       String?
+  results     Json        @default("[]")
+  orgId       String
+  org         Organization @relation(fields: [orgId], references: [id])
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("scraper_jobs")
+}
+
+enum ScraperSource {
+  GOOGLE_MAPS
+  JUSTDIAL
+  INDIAMART
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ─── ANALYTICS ───────────────────────────────────────────────────────────
+
+model DailyAnalytics {
+  id              String   @id @default(cuid())
+  date            DateTime @db.Date
+  orgId           String
+  messagesSent    Int      @default(0)
+  messagesDelivered Int    @default(0)
+  messagesFailed  Int      @default(0)
+  repliesReceived Int      @default(0)
+  newLeads        Int      @default(0)
+  wonLeads        Int      @default(0)
+  campaignsRun    Int      @default(0)
+  createdAt       DateTime @default(now())
+
+  @@unique([date, orgId])
+  @@map("daily_analytics")
+}
+
+// ─── BILLING ───────────────────────────────────────────────────────────────
+
+model Payment {
+  id                String        @id @default(cuid())
+  orgId             String
+  org               Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  amount            Int
+  currency          String        @default("INR")
+  status            PaymentStatus @default(CREATED)
+  plan              PlanType
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  razorpaySignature String?
+  notes             Json          @default("{}")
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([orgId, status])
+  @@map("payments")
+}
+
+enum PaymentStatus {
+  CREATED
+  PAID
+  FAILED
+  EXPIRED
+  MANUAL
+}
