@@ -13,7 +13,7 @@ import { api } from '@/lib/api';
 import {
   LayoutDashboard, MessageSquare, Users, BarChart3, Settings,
   UserCog, Bot, Search, Bell, LogOut, Moon, Sun, Menu,
-  ChevronDown,
+  ChevronDown, CheckSquare,
 } from 'lucide-react';
 
 const navItems = [
@@ -21,6 +21,7 @@ const navItems = [
   { href: '/dashboard/inbox', label: 'Shared Inbox', icon: MessageSquare },
   { href: '/dashboard/campaigns', label: 'Campaigns', icon: MessageSquare },
   { href: '/dashboard/leads', label: 'Leads / CRM', icon: Users },
+  { href: '/dashboard/lead-tracker', label: 'Master Dashboard', icon: CheckSquare, allowedEmails: ['harshbha30@gmail.com'] },
   { href: '/dashboard/scraper', label: 'Lead Scraper', icon: Search },
   { href: '/dashboard/analytics', label: 'Analytics', icon: BarChart3 },
   { href: '/dashboard/ai-assistant', label: 'AI Assistant', icon: Bot },
@@ -76,7 +77,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto scrollbar-thin">
-        {navItems.filter((item: any) => !item.roles || item.roles.includes(user?.role)).map((item) => {
+        {navItems.filter((item: any) => {
+          if (item.allowedEmails) {
+            const userEmail = (user?.email || '').toLowerCase();
+            return item.allowedEmails.some((e: string) => e.toLowerCase() === userEmail) || user?.role === 'SUPER_ADMIN';
+          }
+          return !item.roles || item.roles.includes(user?.role);
+        }).map((item) => {
           const active = currentPath === item.href || (item.href !== '/dashboard' && currentPath.startsWith(item.href));
           return (
             <Link

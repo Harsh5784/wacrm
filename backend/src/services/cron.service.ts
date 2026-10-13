@@ -1,7 +1,70 @@
 import cron from 'node-cron';
 import { prisma } from '../lib/prisma';
+import { sendWhatsAppMessage } from './whatsapp.service';
 
 export const setupCronJobs = () => {
+  // Automated WhatsApp follow-up dispatcher — runs every 1 minute
+  cron.schedule('* * * * *', async () => {
+    try {
+      const now = new Date();
+      const dueReminders = await prisma.reminder.findMany({
+        where: { status: 'PENDING', dueAt: { lte: now } },
+        include: { lead: true },
+        take: 20,
+      });
+
+      for (const reminder of dueReminders) {
+        if (!reminder.lead?.phone) continue;
+
+        const session = await prisma.whatsAppSession.findFirst({
+          where: { orgId: reminder.lead.orgId, status: 'CONNECTED' },
+          orderBy: { updatedAt: 'desc' },
+        });
+
+        if (session) {
+          const content = reminder.description || `Hi ${reminder.lead.name || 'there'}, this is an automated follow-up regarding your account.`;
+          const sendRes = await sendWhatsAppMessage(session.id, reminder.lead.phone, content);
+
+          if (sendRes.success) {
+            await prisma.reminder.update({
+              where: { id: reminder.id },
+              data: { status: 'COMPLETED' },
+            });
+
+            await prisma.lead.update({
+              where: { id: reminder.leadId },
+              data: {
+                stage: 'CONTACTED',
+                customerStatus: 'FOLLOW_UP_PENDING',
+                lastContactedAt: new Date(),
+                customFields: {
+                  ...((reminder.lead.customFields as any) || {}),
+                  autoFollowUpSentAt: new Date().toISOString(),
+                  lastAutoMessage: content,
+                },
+              },
+            });
+
+            await prisma.message.create({
+              data: {
+                direction: 'OUTBOUND',
+                content,
+                status: 'SENT',
+                messageId: sendRes.messageId,
+                leadId: reminder.leadId,
+                sentAt: new Date(),
+                metadata: { sessionId: session.id, autoCron: true, reminderId: reminder.id },
+              },
+            });
+
+            console.log(`[Cron Auto-Followup] WhatsApp sent to ${reminder.lead.name} (${reminder.lead.phone})`);
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('[Cron Auto-Followup Error]', error.message);
+    }
+  });
   // Daily analytics aggregation - runs at midnight
   cron.schedule('0 0 * * *', async () => {
     console.log('[Cron] Aggregating daily analytics...');

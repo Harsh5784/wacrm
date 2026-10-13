@@ -35,11 +35,25 @@ import billingRoutes from './routes/billing.routes';
 const app = express();
 const httpServer = createServer(app);
 
+// ─── ALWAYS FIRST: CORS HEADERS & PREFLIGHT OPTIONS ─────────────────────────
+app.use((req, res, next) => {
+  const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer).origin : '*');
+  res.header('Access-Control-Allow-Origin', origin);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform, Referer, User-Agent');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).send('OK');
+  }
+  next();
+});
+
 // Socket.io
 const io = new Server(httpServer, {
   cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    methods: ['GET', 'POST'],
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
   },
 });
@@ -49,12 +63,28 @@ app.set('io', io);
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 
+app.use((req, res, next) => {
+  const origin = req.headers.origin || '*';
+  res.header('Access-Control-Allow-Origin', origin);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform, Referer, User-Agent');
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(compression());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: true,
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['*'],
+  exposedHeaders: ['*'],
 }));
+app.options('*', cors({ origin: true, credentials: true }));
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -93,6 +123,39 @@ app.use(`${API_BASE}/settings`, settingsRoutes);
 app.use(`${API_BASE}/whatsapp`, whatsappRoutes);
 app.use(`${API_BASE}/tags`, tagRoutes);
 app.use(`${API_BASE}/billing`, billingRoutes);
+
+// ─── BHARAT MILK DIRECT SERVER-TO-SERVER FORWARDER ─────────────────────────
+app.all(`${API_BASE}/bm/*`, async (req, res) => {
+  const subPath = (req.params as any)[0] || '';
+  const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  const targetUrl = `http://crowncraftinnovations.in:8080/${subPath}${queryString}`;
+
+  const headers: Record<string, string> = {
+    'content-type': (req.headers['content-type'] as string) || 'application/json',
+    'accept': (req.headers['accept'] as string) || 'application/json, text/plain, */*',
+  };
+
+  if (req.headers.authorization) {
+    headers['authorization'] = req.headers.authorization as string;
+  }
+
+  try {
+    const options: RequestInit = {
+      method: req.method,
+      headers,
+    };
+
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && Object.keys(req.body).length) {
+      options.body = JSON.stringify(req.body);
+    }
+
+    const response = await fetch(targetUrl, options);
+    const data = await response.json().catch(() => ({ success: false, message: 'Invalid JSON response from server' }));
+    return res.status(response.status).json(data);
+  } catch (err: any) {
+    return res.status(502).json({ success: false, message: 'Bharat Milk API server unreachable: ' + err.message });
+  }
+});
 
 // Health check
 app.get('/health', async (req, res) => {

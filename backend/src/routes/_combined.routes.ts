@@ -725,3 +725,267 @@ whatsappRouter.put('/chats/:leadId/status', async (req: AuthRequest, res) => {
   req.app.get('io')?.to(`org:${req.user!.orgId}`).emit('lead:updated', { leadId: lead.id });
   res.json({ success: true, data: updated });
 });
+
+whatsappRouter.post('/chats/:leadId/toggle-check', async (req: AuthRequest, res) => {
+  const lead = await prisma.lead.findFirst({ where: scopedLeadWhere(req, { id: req.params.leadId }) });
+  if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+  const currentFields = (lead.customFields as any) || {};
+  const isChecked = !currentFields.isChecked;
+  const newFields = {
+    ...currentFields,
+    isChecked,
+    checkedAt: isChecked ? new Date().toISOString() : null,
+  };
+
+  const updated = await prisma.lead.update({
+    where: { id: lead.id },
+    data: {
+      customFields: newFields,
+      ...(isChecked && lead.customerStatus === 'FOLLOW_UP_PENDING' ? { customerStatus: 'CLOSED' } : {}),
+    },
+  });
+
+  await prisma.activity.create({
+    data: {
+      type: 'LEAD_UPDATED',
+      description: isChecked ? 'Lead marked as checked/followed up' : 'Lead unchecked',
+      leadId: lead.id,
+      userId: req.user!.id,
+    },
+  });
+
+  req.app.get('io')?.to(`org:${req.user!.orgId}`).emit('lead:updated', { leadId: lead.id });
+  res.json({ success: true, data: updated, isChecked });
+});
+
+whatsappRouter.post('/chats/:leadId/schedule-message', async (req: AuthRequest, res) => {
+  const lead = await prisma.lead.findFirst({ where: scopedLeadWhere(req, { id: req.params.leadId }) });
+  if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+  const { scheduledAt, messageContent, note } = req.body;
+  if (!scheduledAt) return res.status(400).json({ success: false, message: 'Scheduled date and time required' });
+
+  const dueAt = new Date(scheduledAt);
+  const reminder = await prisma.reminder.create({
+    data: {
+      title: note || `Scheduled WhatsApp to ${lead.name}`,
+      description: messageContent || note || 'Follow-up WhatsApp Message',
+      dueAt,
+      leadId: lead.id,
+      userId: req.user!.id,
+      status: 'PENDING',
+    },
+  });
+
+  const updatedLead = await prisma.lead.update({
+    where: { id: lead.id },
+    data: {
+      followUpAt: dueAt,
+      customerStatus: 'FOLLOW_UP_PENDING',
+      customFields: {
+        ...((lead.customFields as any) || {}),
+        lastScheduledMessage: messageContent,
+        scheduledAt: dueAt.toISOString(),
+      },
+    },
+  });
+
+  await prisma.activity.create({
+    data: {
+      type: 'REMINDER_SET',
+      description: `Scheduled message set for ${dueAt.toLocaleString('en-IN')}`,
+      leadId: lead.id,
+      userId: req.user!.id,
+      metadata: { reminderId: reminder.id, dueAt },
+    },
+  });
+
+  res.status(201).json({ success: true, data: { reminder, lead: updatedLead } });
+});
+
+// ─── Ticketing System ────────────────────────────────────────────────────────
+whatsappRouter.get('/tickets', async (req: AuthRequest, res) => {
+  try {
+    const tickets = await prisma.reminder.findMany({
+      where: {
+        OR: [
+          { userId: req.user!.id },
+          { lead: { orgId: req.user!.orgId } },
+        ]
+      },
+      include: {
+        lead: { select: { id: true, name: true, phone: true, company: true, customerStatus: true } },
+        user: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+
+    res.json({ success: true, data: tickets });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: 'Failed to load tickets: ' + err.message });
+  }
+});
+
+whatsappRouter.post('/tickets', async (req: AuthRequest, res) => {
+  const { title, description, leadId, phone, customerName, category, priority } = req.body;
+
+  let lead = leadId
+    ? await prisma.lead.findFirst({ where: { id: leadId, orgId: req.user!.orgId } })
+    : null;
+
+  const contactPhone = phone || '9098835618';
+  const normalizedPhone = contactPhone.startsWith('+') ? contactPhone : `+91${contactPhone.replace(/\D/g, '')}`;
+
+  if (!lead) {
+    lead = await prisma.lead.findFirst({ where: { orgId: req.user!.orgId, phone: normalizedPhone } });
+  }
+
+  if (!lead) {
+    lead = await prisma.lead.create({
+      data: {
+        name: customerName || `Vendor/Customer ${contactPhone.slice(-4)}`,
+        phone: normalizedPhone,
+        orgId: req.user!.orgId,
+        ownerId: req.user!.id,
+        source: 'WHATSAPP',
+        customerStatus: 'FOLLOW_UP_PENDING',
+      },
+    });
+  }
+
+  const ticket = await prisma.reminder.create({
+    data: {
+      title: title || `[Ticket] ${category || 'Support Issue'}`,
+      description: description || 'Support ticket raised',
+      dueAt: new Date(Date.now() + 24 * 3600 * 1000),
+      status: 'PENDING',
+      leadId: lead.id,
+      userId: req.user!.id,
+    },
+  });
+
+  await prisma.activity.create({
+    data: {
+      type: 'REMINDER_SET',
+      description: `Support Ticket created: ${ticket.title}`,
+      leadId: lead.id,
+      userId: req.user!.id,
+      metadata: { ticketId: ticket.id, priority, category },
+    },
+  });
+
+  res.status(201).json({ success: true, data: { ticket, lead } });
+});
+
+whatsappRouter.put('/tickets/:id/status', async (req: AuthRequest, res) => {
+  const { status } = req.body;
+  const ticket = await prisma.reminder.update({
+    where: { id: req.params.id },
+    data: { status: status as any },
+    include: { lead: true },
+  });
+
+  if (status === 'COMPLETED') {
+    await prisma.lead.update({
+      where: { id: ticket.leadId },
+      data: {
+        customerStatus: 'CLOSED',
+        customFields: { ...((ticket.lead.customFields as any) || {}), isChecked: true },
+      },
+    });
+  }
+
+  res.json({ success: true, data: ticket });
+});
+
+whatsappRouter.post('/tickets/:id/reply', async (req: AuthRequest, res) => {
+  const { content } = req.body;
+  const ticket = await prisma.reminder.findUnique({
+    where: { id: req.params.id },
+    include: { lead: true },
+  });
+
+  if (!ticket || !ticket.lead?.phone) {
+    return res.status(404).json({ success: false, message: 'Ticket or customer phone not found' });
+  }
+
+  const session = await prisma.whatsAppSession.findFirst({
+    where: { orgId: req.user!.orgId, status: 'CONNECTED' },
+    orderBy: { updatedAt: 'desc' },
+  });
+
+  if (!session) {
+    return res.status(400).json({ success: false, message: 'Connect WhatsApp session first before replying' });
+  }
+
+  const sendRes = await sendWhatsAppMessage(session.id, ticket.lead.phone, content);
+  if (!sendRes.success) {
+    return res.status(400).json({ success: false, message: sendRes.error || 'Failed to send WhatsApp reply' });
+  }
+
+  await prisma.message.create({
+    data: {
+      direction: 'OUTBOUND',
+      content,
+      status: 'SENT',
+      messageId: sendRes.messageId,
+      leadId: ticket.leadId,
+      sentAt: new Date(),
+      metadata: { sessionId: session.id, ticketId: ticket.id },
+    },
+  });
+
+  await prisma.note.create({
+    data: {
+      content: `[Ticket WhatsApp Reply] ${content}`,
+      leadId: ticket.leadId,
+      authorId: req.user!.id,
+    },
+  });
+
+  res.json({ success: true, message: 'WhatsApp reply sent to customer for ticket' });
+});
+
+// ─── Bharat Milk Backend Proxy (Node server-to-server) ──────────────────────
+whatsappRouter.all('/bm-proxy/*', async (req: AuthRequest, res) => {
+  const subPath = (req.params as any)[0] || '';
+  const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+
+  const targetBases = [
+    'http://crowncraftinnovations.in:8080',
+    'http://localhost:8080',
+    'http://localhost:13000',
+    'http://crowncraftinnovations.in',
+  ];
+
+  const headers: any = { 'Content-Type': 'application/json' };
+  if (req.headers.authorization) {
+    headers['Authorization'] = req.headers.authorization;
+  }
+  if (req.headers['x-bm-token']) {
+    headers['Authorization'] = `Bearer ${req.headers['x-bm-token']}`;
+  }
+
+  for (const base of targetBases) {
+    try {
+      const targetUrl = `${base}/${subPath}${queryString}`;
+      const options: any = {
+        method: req.method,
+        headers,
+      };
+      if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && Object.keys(req.body).length) {
+        options.body = JSON.stringify(req.body);
+      }
+
+      const response = await fetch(targetUrl, options);
+      const data = await response.json();
+      return res.status(response.status).json(data);
+    } catch {
+      // try next target base
+    }
+  }
+
+  res.status(502).json({ success: false, message: 'Bharat Milk server unreachable' });
+});

@@ -260,18 +260,22 @@ export const chat = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ success: false, message: 'Messages are required' });
     }
 
-    const history = messages.slice(0, -1).map((m: any) => ({
-      role: (m.role === 'assistant' ? 'model' : 'user') as 'model' | 'user',
-      parts: [{ text: String(m.content || '') }],
-    }));
-
     const lastMessage = messages[messages.length - 1]?.content || '';
     const { apiKey, businessContext } = await getAIProfile(req.user!.orgId);
-    const message = await sendChatWithOptionalKey(
-      history,
-      `${systemContext}\n${businessContext}\nContext: ${context || 'WhatsApp marketing for Indian businesses'}\n\nAlways return clean WhatsApp-ready text, not JSON unless explicitly asked.\n\n${lastMessage}`,
-      apiKey
-    );
+    const fullPrompt = `${systemContext}\n${businessContext}\nContext: ${context || 'Bharat Milk Master Operations & Vendor Management'}\n\nAlways return clean, concise, professional text for WhatsApp messaging.\n\nUser Query: ${lastMessage}`;
+
+    let message = '';
+    try {
+      message = await sendChatWithOptionalKey([], fullPrompt, apiKey);
+    } catch {
+      // Smart Fallback when AI Key is suspended or quota exceeded
+      const vendorName = lastMessage.match(/Vendor Name:\s*([^\n,]+)/i)?.[1]?.trim() || 'Milk Vendor';
+      const phone = lastMessage.match(/Phone:\s*([^\n,]+)/i)?.[1]?.trim() || '';
+      const volume = lastMessage.match(/Volume:\s*([^\n,]+)/i)?.[1]?.trim() || '0';
+      const cust = lastMessage.match(/Customers:\s*([^\n,]+)/i)?.[1]?.trim() || '0';
+
+      message = `*Bharat Milk Vendor Update*\n\nHello ${vendorName},\n\nThank you for using Bharat Milk Accounting Platform to manage your dairy sales! Here is your quick operational summary:\n\n🥛 *Active Customers*: ${cust}\n📦 *Monthly Milk Volume*: ${volume}\n\n📌 *Reminder*: Please log your daily milk entries on time to keep your customer records up to date. If you need any assistance or want to onboard new customers, let us know!\n\nBest regards,\n*Bharat Milk Support Team*`;
+    }
 
     res.json({ success: true, data: { message: cleanAIText(message) } });
   } catch (error: any) {

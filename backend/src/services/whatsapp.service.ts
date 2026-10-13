@@ -184,8 +184,14 @@ function emitSession(orgId: string, sessionId: string, status: string, qrCode?: 
 export async function initializeWhatsAppService(io: Server) {
   ioServer = io;
 
+  // Reset leftover SCANNING state to DISCONNECTED on startup to prevent Puppeteer re-injection crashes
+  await prisma.whatsAppSession.updateMany({
+    where: { status: 'SCANNING' },
+    data: { status: 'DISCONNECTED', qrCode: null },
+  }).catch(console.error);
+
   const sessions = await prisma.whatsAppSession.findMany({
-    where: { status: { in: ['CONNECTED', 'SCANNING', 'WARMING_UP'] } },
+    where: { status: { in: ['CONNECTED', 'WARMING_UP'] } },
     select: { id: true, orgId: true },
   });
 
@@ -357,7 +363,18 @@ export async function initializeWhatsAppSession(sessionId: string, orgId: string
     emitSession(orgId, sessionId, 'DISCONNECTED', null);
   });
 
-  await client.initialize();
+  try {
+    await client.initialize();
+  } catch (error: any) {
+    console.error(`[WhatsApp] Session initialization failed for ${sessionId}:`, error.message);
+    clients.delete(sessionId);
+    readyClients.delete(sessionId);
+    await prisma.whatsAppSession.update({
+      where: { id: sessionId },
+      data: { status: 'DISCONNECTED', qrCode: null },
+    }).catch(console.error);
+    emitSession(orgId, sessionId, 'DISCONNECTED', null);
+  }
 }
 
 export async function destroyWhatsAppSession(sessionId: string) {

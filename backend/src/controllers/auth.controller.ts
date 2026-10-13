@@ -198,6 +198,8 @@ export const forgotPassword = async (req: Request, res: Response) => {
         to: user.email,
         subject: 'Reset your WACrm Pro password',
         ...emailBody,
+      }).catch(err => {
+        console.warn('SMTP send failed (check backend/.env SMTP settings):', err.message);
       });
     }
 
