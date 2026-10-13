@@ -34,6 +34,7 @@ import billingRoutes from './routes/billing.routes';
 
 const app = express();
 const httpServer = createServer(app);
+app.set('trust proxy', 1);
 
 // Socket.io
 const io = new Server(httpServer, {
@@ -52,12 +53,23 @@ app.set('io', io);
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(compression());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: true,
   credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+  exposedHeaders: ['Authorization'],
 }));
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+app.use(morgan(':method :url :status :response-time ms', {
+  skip: (req,res) => res.statusCode === 304
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use((req,res,next)=>{
+  res.setHeader('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma','no-cache');
+  res.setHeader('Expires','0');
+  next();
+});
 
 // Static files
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));

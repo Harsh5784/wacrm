@@ -258,6 +258,7 @@ teamRouter.post('/invite', async (req: AuthRequest, res) => {
     const { organization, ...member } = user;
     res.status(201).json({ success: true, data: { ...member, tempPassword: password, emailSent: mail.sent } });
   } catch (error) {
+    console.error('DIRECT_SEND_ERROR', error);
     console.error('Invite error:', error);
     res.status(500).json({ success: false, message: 'Failed to invite member' });
   }
@@ -580,7 +581,8 @@ whatsappRouter.post('/chats/:leadId/send', async (req: AuthRequest, res) => {
   if (!result.success) return res.status(400).json({ success: false, message: result.error || 'WhatsApp send failed' });
 
   const mediaType = req.body.mediaType || (mediaUrl ? 'DOCUMENT' : 'TEXT');
-  const message = await prisma.message.create({
+  console.log('MESSAGE_CREATE_IDS', {leadId: lead?.id, userId:req.user?.id, sessionId:session?.id, whatsappMessageId:result?.messageId});
+    const message = await prisma.message.create({
     data: {
       direction: 'OUTBOUND',
       content: content || req.body.fileName || '[media]',
@@ -622,75 +624,202 @@ whatsappRouter.post('/chats/:leadId/send', async (req: AuthRequest, res) => {
   res.status(201).json({ success: true, data: message });
 });
 
+
 whatsappRouter.post('/direct/send', async (req: AuthRequest, res) => {
-  const phone = String(req.body.phone || '').replace(/\D/g, '');
-  const name = String(req.body.name || '').trim() || phone;
-  const content = String(req.body.content || '').trim();
 
-  if (!phone || phone.length < 10) return res.status(400).json({ success: false, message: 'Valid phone number is required' });
-  if (!content) return res.status(400).json({ success: false, message: 'Message is required' });
+  console.log("=== DIRECT_SEND_START ===");
+  console.log("BODY:", JSON.stringify(req.body));
+  console.log("USER:", JSON.stringify(req.user));
 
-  const session = req.body.sessionId
-    ? await prisma.whatsAppSession.findFirst({ where: { id: req.body.sessionId, orgId: req.user!.orgId } })
-    : await prisma.whatsAppSession.findFirst({ where: { orgId: req.user!.orgId, status: 'CONNECTED' }, orderBy: { updatedAt: 'desc' } });
-  if (!session) return res.status(400).json({ success: false, message: 'Add and scan a WhatsApp Web session in Settings before sending.' });
+  try {
 
-  const normalizedPhone = phone.startsWith('91') ? `+${phone}` : `+91${phone}`;
-  const result = await sendWhatsAppMessage(session.id, normalizedPhone, content);
-  if (!result.success) return res.status(400).json({ success: false, message: result.error || 'WhatsApp send failed' });
+    const phone = String(req.body.phone || '').replace(/\D/g, '');
+    const name = String(req.body.name || '').trim() || phone;
+    const content = String(req.body.content || '').trim();
 
-  let lead = await prisma.lead.findFirst({ where: { orgId: req.user!.orgId, phone: normalizedPhone } });
-  if (!lead) {
-    lead = await prisma.lead.create({
-      data: {
-        name,
-        phone: normalizedPhone,
-        source: 'WHATSAPP',
-        stage: 'CONTACTED',
-        customerStatus: 'NO_RESPONSE',
-        orgId: req.user!.orgId,
-        ownerId: req.user!.id,
-        assignedToId: req.user!.id,
-        lastContactedAt: new Date(),
-        customFields: { createdFromDirectMessage: true, replyState: 'Lead was contacted but no reply received' },
-      },
+    if (!phone || phone.length < 10)
+      return res.status(400).json({success:false,message:"Valid phone number required"});
+
+    if (!content)
+      return res.status(400).json({success:false,message:"Message required"});
+
+
+    console.log("STEP 1 FIND SESSION");
+
+    const session = req.body.sessionId
+      ? await prisma.whatsAppSession.findFirst({
+          where:{
+            id:req.body.sessionId,
+            orgId:req.user!.orgId
+          }
+        })
+      : await prisma.whatsAppSession.findFirst({
+          where:{
+            orgId:req.user!.orgId,
+            status:"CONNECTED"
+          },
+          orderBy:{
+            updatedAt:"desc"
+          }
+        });
+
+
+    console.log("SESSION:", session?.id);
+
+
+    if(!session)
+      return res.status(400).json({
+        success:false,
+        message:"No connected WhatsApp session"
+      });
+
+
+
+    const normalizedPhone = phone.startsWith("91")
+      ? "+"+phone
+      : "+91"+phone;
+
+
+    console.log("STEP 2 SEND WHATSAPP");
+
+    const result = await sendWhatsAppMessage(
+      session.id,
+      normalizedPhone,
+      content
+    );
+
+
+    console.log("WHATSAPP RESULT:", result);
+
+
+    if(!result.success)
+      return res.status(400).json({
+        success:false,
+        message:result.error
+      });
+
+
+
+    console.log("STEP 3 FIND LEAD");
+
+
+    let lead = await prisma.lead.findFirst({
+      where:{
+        orgId:req.user!.orgId,
+        phone:normalizedPhone
+      }
     });
+
+
+
+    console.log("OLD LEAD:", lead?.id);
+
+
+
+    if(!lead){
+
+      console.log("CREATING LEAD");
+
+
+      lead = await prisma.lead.create({
+
+        data:{
+          name,
+          phone:normalizedPhone,
+          source:"WHATSAPP",
+          stage:"CONTACTED",
+          customerStatus:"NO_RESPONSE",
+          orgId:req.user!.orgId,
+          ownerId:req.user!.id,
+          assignedToId:req.user!.id,
+          lastContactedAt:new Date(),
+          customFields:{
+            directSend:true
+          }
+        }
+
+      });
+
+    }
+
+
+
+    console.log("FINAL LEAD:", lead.id);
+
+
+
+    console.log("CREATING MESSAGE");
+
+
+    const message = await prisma.message.create({
+
+      data:{
+        direction:"OUTBOUND",
+        content,
+        status:"SENT",
+        messageId:result.messageId,
+        leadId:lead.id,
+        sentAt:new Date(),
+
+        metadata:{
+          sessionId:session.id,
+          sentById:req.user!.id,
+          directSend:true
+        }
+      }
+
+    });
+
+
+
+    console.log("MESSAGE CREATED:", message.id);
+
+
+
+    await prisma.activity.create({
+
+      data:{
+        type:"MESSAGE_SENT",
+        description:"Direct WhatsApp message sent from CRM",
+        leadId:lead.id,
+        userId:req.user!.id,
+        metadata:{
+          messageId:message.id,
+          sessionId:session.id
+        }
+      }
+
+    });
+
+
+
+    console.log("=== DIRECT_SEND_SUCCESS ===");
+
+
+    res.status(201).json({
+      success:true,
+      data:{
+        lead,
+        message
+      }
+    });
+
+
+
+  } catch(error:any){
+
+    console.error("DIRECT_SEND_FATAL:",error);
+    console.error(error?.stack);
+
+    return res.status(400).json({
+      success:false,
+      message:error?.message
+    });
+
   }
 
-  const message = await prisma.message.create({
-    data: {
-      direction: 'OUTBOUND',
-      content,
-      status: 'SENT',
-      messageId: result.messageId,
-      leadId: lead.id,
-      sentAt: new Date(),
-      metadata: { sessionId: session.id, sentById: req.user!.id, directSend: true },
-    },
-  });
-
-  await prisma.lead.update({
-    where: { id: lead.id },
-    data: {
-      lastContactedAt: new Date(),
-      stage: lead.stage === 'NEW' ? 'CONTACTED' : lead.stage,
-      customerStatus: lead.customerStatus === 'NEW_LEAD' ? 'NO_RESPONSE' : lead.customerStatus,
-    },
-  });
-
-  await prisma.activity.create({
-    data: {
-      type: 'MESSAGE_SENT',
-      description: 'Direct WhatsApp message sent from CRM',
-      leadId: lead.id,
-      userId: req.user!.id,
-      metadata: { messageId: message.id, sessionId: session.id },
-    },
-  });
-
-  req.app.get('io')?.to(`org:${req.user!.orgId}`).emit('whatsapp:message', { leadId: lead.id, message });
-  res.status(201).json({ success: true, data: { lead, message } });
 });
+
 
 whatsappRouter.put('/chats/:leadId/status', async (req: AuthRequest, res) => {
   const lead = await prisma.lead.findFirst({ where: scopedLeadWhere(req, { id: req.params.leadId }) });

@@ -200,14 +200,28 @@ export async function initializeWhatsAppSession(sessionId: string, orgId: string
   if (clients.has(sessionId)) return;
 
   const { Client, LocalAuth } = loadWhatsAppWeb();
+  await new Promise(resolve => setTimeout(resolve, 3000));
   const client = new Client({
     authStrategy: new LocalAuth({
       clientId: sessionId,
-      dataPath: process.env.WHATSAPP_SESSION_PATH || path.resolve(process.cwd(), '.wwebjs_auth'),
+      dataPath: process.env.WHATSAPP_SESSION_PATH || '/app/.wwebjs_auth',
     }),
     puppeteer: {
+      executablePath: '/usr/bin/chromium',
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-features=IsolateOrigins,site-per-process'
+      ]
     },
   }) as WhatsAppClient;
 
@@ -357,7 +371,8 @@ export async function initializeWhatsAppSession(sessionId: string, orgId: string
     emitSession(orgId, sessionId, 'DISCONNECTED', null);
   });
 
-  await client.initialize();
+  await await new Promise(resolve => setTimeout(resolve, 3000));
+    await client.initialize();
 }
 
 export async function destroyWhatsAppSession(sessionId: string) {
@@ -398,7 +413,7 @@ export async function sendWhatsAppMessage(sessionId: string | null | undefined, 
 
     return {
       success: true,
-      messageId: result.id?._serialized || `wa_${Date.now()}`,
+      messageId: result?.id?._serialized || `wa_${Date.now()}`,
     };
   } catch (error: any) {
     return { success: false, error: error.message || 'WhatsApp send failed' };
@@ -438,7 +453,7 @@ export async function sendWhatsAppMediaMessage(
       where: { id: sessionId },
       data: { messagesSent: { increment: 1 } },
     });
-    return { success: true, messageId: result.id?._serialized || `wa_${Date.now()}` };
+    return { success: true, messageId: result?.id?._serialized || `wa_${Date.now()}` };
   } catch (error: any) {
     return { success: false, error: error.message || 'WhatsApp media send failed' };
   }

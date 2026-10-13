@@ -14,7 +14,7 @@ const keys = Array.from(new Set([
 
 let currentKeyIndex = 0;
 const keyFailCounts: Record<number, number> = {};
-export const geminiModelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+export const geminiModelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 export function getGeminiModel(modelName = geminiModelName) {
   if (keys.length === 0) {
