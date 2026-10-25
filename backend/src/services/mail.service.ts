@@ -1,5 +1,3 @@
-import nodemailer from 'nodemailer';
-
 type MailOptions = {
   to: string;
   subject: string;
@@ -7,14 +5,7 @@ type MailOptions = {
   html?: string;
 };
 
-const SMTP_HOST = process.env.SMTP_HOST || process.env.MAIL_HOST || 'smtp.zoho.in';
-const SMTP_PORT = Number(process.env.SMTP_PORT || process.env.MAIL_PORT || 465);
-const SMTP_USER = process.env.SMTP_USER || process.env.MAIL_USER;
-const SMTP_PASS = process.env.SMTP_PASS || process.env.MAIL_PASS;
-const SMTP_FROM = process.env.SMTP_FROM || process.env.MAIL_FROM || SMTP_USER;
-const SMTP_SECURE =
-  (process.env.SMTP_SECURE || process.env.MAIL_SECURE || '').toLowerCase() === 'true' ||
-  SMTP_PORT === 465;
+const OTP_SERVICE_URL = (process.env.OTP_SERVICE_URL || 'https://otpservice.crowncraftinnovations.in').replace(/\/$/, '');
 
 const escapeHtml = (value: string) =>
   value
@@ -24,57 +15,46 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;');
 
 export function isMailConfigured() {
-  return Boolean(SMTP_HOST && SMTP_FROM && SMTP_USER && SMTP_PASS);
+  return Boolean(process.env.OTP_SERVICE_API_KEY);
 }
 
 export async function sendMail(options: MailOptions) {
   if (!isMailConfigured()) {
-    console.warn(`[Mail] SMTP not configured. Skipping email to ${options.to}: ${options.subject}`);
-    return { sent: false, skipped: true };
+    throw new Error('OTP email service is not configured.');
   }
 
-  const transporter = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE,
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,
-    },
-    connectionTimeout: 15000,
-    greetingTimeout: 10000,
-    socketTimeout: 30000,
-  });
-
-  const attempts = Number(process.env.SMTP_RETRY_ATTEMPTS || 3);
-  let lastError: any;
-
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      const info = await transporter.sendMail({
-        from: SMTP_FROM,
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(`${OTP_SERVICE_URL}/api/emails/send`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.OTP_SERVICE_API_KEY!,
+      },
+      body: JSON.stringify({
         to: options.to,
         subject: options.subject.replace(/\r?\n/g, ' ').trim(),
         text: options.text,
         html: options.html || `<p>${escapeHtml(options.text).replace(/\n/g, '<br />')}</p>`,
-      });
+      }),
+      signal: controller.signal,
+    });
 
-      console.info(`[Mail] Sent ${info.messageId} to ${options.to} via ${SMTP_HOST}:${SMTP_PORT}`);
-      return { sent: true, skipped: false, messageId: info.messageId };
-    } catch (error: any) {
-      lastError = error;
-      console.error(`[Mail] Attempt ${attempt}/${attempts} failed for ${options.to} via ${SMTP_HOST}:${SMTP_PORT}`, {
-        code: error?.code,
-        command: error?.command,
-        message: error?.message,
-      });
-      if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
-      }
+    if (response.status !== 202) {
+      const detail = (await response.text()).slice(0, 500);
+      throw new Error(`OTP email service rejected the message (HTTP ${response.status})${detail ? `: ${detail}` : ''}`);
     }
-  }
 
-  throw lastError;
+    const result = await response.json() as { messageId?: string };
+    console.info(`[Mail] Accepted by OTP service for ${options.to}`);
+    return { sent: true, skipped: false, messageId: result.messageId };
+  } catch (error: any) {
+    console.error(`[Mail] OTP service request failed for ${options.to}:`, error?.message || error);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function invitationEmail(params: { name: string; email: string; password: string; loginUrl: string; orgName?: string }) {
